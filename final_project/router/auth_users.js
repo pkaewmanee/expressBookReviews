@@ -3,19 +3,38 @@ const jwt = require('jsonwebtoken');
 let books = require("./booksdb.js");
 const regd_users = express.Router();
 
-let users = [];
+const SECRET_KEY = "fingerprint_customer"; // Ensure consistency across files
+let users = []; // User storage (in-memory)
 
+module.exports.users = users;
+
+// Check if username exists
 const isValid = (username) => {
-  // Check if the username exists in the users list
   return users.some(user => user.username === username);
 };
 
+// Authenticate username and password
 const authenticatedUser = (username, password) => {
-  // Check if username and password match an existing user
   return users.some(user => user.username === username && user.password === password);
 };
 
-// Only registered users can login
+// Register a new user
+regd_users.post("/register", (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ message: "Username and password are required" });
+  }
+
+  if (isValid(username)) {
+    return res.status(400).json({ message: "Username already exists" });
+  }
+
+  users.push({ username, password });
+  return res.status(200).json({ message: "User registered successfully" });
+});
+
+// Log in an existing user
 regd_users.post("/login", (req, res) => {
   const { username, password } = req.body;
 
@@ -27,59 +46,76 @@ regd_users.post("/login", (req, res) => {
     return res.status(401).json({ message: "Invalid username or password" });
   }
 
-  // Generate a JWT token for the user
-  const token = jwt.sign({ username }, "fingerprint_customer", { expiresIn: '1h' });
+  const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: "1h" }); // Generate token
+  req.session.token = token; // Store token in session
 
-  // Store the token in the session
-  req.session.token = token;
-
-  return res.status(200).json({ message: "Login successful", token });
+  return res.status(200).json({
+    message: "Login successful",
+    token,
+  });
 });
 
 // Add or modify a book review
 regd_users.put("/auth/review/:isbn", (req, res) => {
-  const isbn = req.params.isbn;
+  const { isbn } = req.params;
   const { review } = req.body;
-  const username = req.session.token ? jwt.decode(req.session.token).username : null;
 
-  if (!username) {
+  if (!req.session || !req.session.token) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  if (!books[isbn]) {
-    return res.status(404).json({ message: "Book not found" });
-  }
+  try {
+    const decoded = jwt.verify(req.session.token, SECRET_KEY);
+    const username = decoded.username;
 
-  if (!review) {
-    return res.status(400).json({ message: "Review is required" });
-  }
+    if (!isbn || !books[isbn]) {
+      return res.status(404).json({ message: "Book not found" });
+    }
 
-  // Add or modify the review
-  if (!books[isbn].reviews) {
-    books[isbn].reviews = {};
-  }
-  books[isbn].reviews[username] = review;
+    if (!review) {
+      return res.status(400).json({ message: "Review is required" });
+    }
 
-  return res.status(200).json({ message: "Review added/modified successfully", reviews: books[isbn].reviews });
+    if (!books[isbn].reviews) {
+      books[isbn].reviews = {};
+    }
+
+    books[isbn].reviews[username] = review;
+
+    return res.status(200).json({
+      message: "Review added/updated successfully",
+      reviews: books[isbn].reviews,
+    });
+  } catch (error) {
+    return res.status(403).json({ message: "Invalid token" });
+  }
 });
 
 // Delete a book review
 regd_users.delete("/auth/review/:isbn", (req, res) => {
-  const isbn = req.params.isbn;
-  const username = req.session.token ? jwt.decode(req.session.token).username : null;
+  const { isbn } = req.params;
 
-  if (!username) {
+  if (!req.session || !req.session.token) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  if (!books[isbn] || !books[isbn].reviews || !books[isbn].reviews[username]) {
-    return res.status(404).json({ message: "Review not found" });
+  try {
+    const decoded = jwt.verify(req.session.token, SECRET_KEY);
+    const username = decoded.username;
+
+    if (!books[isbn] || !books[isbn].reviews || !books[isbn].reviews[username]) {
+      return res.status(404).json({ message: "Review not found" });
+    }
+
+    delete books[isbn].reviews[username];
+
+    return res.status(200).json({
+      message: "Review deleted successfully",
+      reviews: books[isbn].reviews,
+    });
+  } catch (error) {
+    return res.status(403).json({ message: "Invalid token" });
   }
-
-  // Delete the user's review
-  delete books[isbn].reviews[username];
-
-  return res.status(200).json({ message: "Review deleted successfully", reviews: books[isbn].reviews });
 });
 
 module.exports.authenticated = regd_users;
